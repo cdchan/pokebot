@@ -1,0 +1,2 @@
+# pokebot
+Pokemon Go slackbot
