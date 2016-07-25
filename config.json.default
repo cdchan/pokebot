@@ -1,0 +1,15 @@
+{
+    "prod_channel": "",
+    "test_channel": "",
+    "webhook_url": "",
+    "office": {
+        "latitude": ,
+        "longitude": ,
+        "altitude": 
+    },
+    "authentication": {
+        "auth_service": "",
+        "username": "",
+        "password": ""
+    }
+}
