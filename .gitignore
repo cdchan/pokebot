@@ -1,2 +1,4 @@
-*.json
+config.json
+known_pokemons.json
+
 *.csv
