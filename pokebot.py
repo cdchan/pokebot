@@ -3,7 +3,9 @@
 import argparse
 import codecs
 import json
+import logging
 import math
+import random
 import requests
 import time
 
@@ -20,6 +22,12 @@ CONFIG = json.load(open("config.json", 'r'))
 
 
 def main():
+    if 'debug' in CONFIG:
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(module)10s] [%(levelname)5s] %(message)s')
+        logging.getLogger("requests").setLevel(logging.DEBUG)
+        logging.getLogger("pgoapi").setLevel(logging.DEBUG)
+        logging.getLogger("rpc_api").setLevel(logging.DEBUG)
+
     parser = argparse.ArgumentParser()
     args = parser.parse_args()
 
@@ -27,47 +35,58 @@ def main():
     pokemon_mapping = json.load(open("pokemon.en.json", 'r'))
 
     # load cached pokemon
-    cached_pokemons = json.load(open("known_pokemons.json", 'r'))
-
-    # only keep pokemon that haven't expired yet
-    pokemons = {encounter_id: pokemon for encounter_id, pokemon in cached_pokemons.items() if pokemon['hides_at'] > time.time()}
-    json.dump(pokemons, open("known_pokemons.json", 'w'))
-    print u"removed {} expired pokemon out of {}".format(len(cached_pokemons) - len(pokemons), len(cached_pokemons))
-
-    # instantiate pgoapi
-    api = PGoApi()
-    api.login(CONFIG['authentication']['auth_service'], CONFIG['authentication']['username'].encode('utf-8'), CONFIG['authentication']['password'].encode('utf-8'))
+    pokemons = json.load(open("known_pokemons.json", 'r'))
 
     coords = create_hexagon(CONFIG['office']['latitude'], CONFIG['office']['longitude'])
 
-    for coord in coords:
-        lat = coord[0]
-        lng = coord[1]
-        print lat, lng
+    # instantiate pgoapi
+    api = PGoApi()
+    countdown = time.time()
 
-        cell_ids = get_cell_ids(lat, lng)
-        timestamps = [0,] * len(cell_ids)
-        api.set_position(lat, lng, 0)  # provide player position on the earth
-        api.get_map_objects(latitude = util.f2i(lat), longitude = util.f2i(lng), since_timestamp_ms = timestamps, cell_id = cell_ids)
-        time.sleep(1)
-        response_dict = api.call()
+    # run forever
+    while True:
+        print u"current login expires at {}".format(countdown)
 
-        if 'status' in response_dict['responses']['GET_MAP_OBJECTS']:
-            if response_dict['responses']['GET_MAP_OBJECTS']['status'] == 1:
-                for map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:
-                    if 'wild_pokemons' in map_cell:
-                        for pokemon in map_cell['wild_pokemons']:
-                            if str(pokemon['encounter_id']) not in pokemons:
-                                pokemon['hides_at'] = time.time() + pokemon['time_till_hidden_ms'] / 1000
-                                pokemon['name'] = pokemon_mapping[str(pokemon['pokemon_data']['pokemon_id'])]
+        if countdown <= time.time():
+            print u"logging in"
+            api.login(CONFIG['authentication']['auth_service'], CONFIG['authentication']['username'].encode('utf-8'), CONFIG['authentication']['password'].encode('utf-8'))
 
-                                pokemons[str(pokemon['encounter_id'])] = pokemon
-                                json.dump(pokemons, open("known_pokemons.json", 'w'))
+            countdown = time.time() + random.random() * 3600  # will need to log back in within the next hour, randomly
+        else:
+            time.sleep(random.random() * 60)  # randomly wait under one minute
 
-                                alert_slack(pokemon)
-                                save_pokemon(pokemon)
+            # only keep pokemon that haven't expired yet
+            previous_n = len(pokemons)
+            pokemons = {encounter_id: pokemon for encounter_id, pokemon in pokemons.items() if pokemon['hides_at'] > time.time()}
+            json.dump(pokemons, open("known_pokemons.json", 'w'))
+            print u"removed {} expired pokemon out of {}".format(previous_n - len(pokemons), previous_n)
 
-    return pokemons
+            for coord in coords:
+                lat = coord[0]
+                lng = coord[1]
+                print u"searching around {}, {}".format(lat, lng)
+
+                cell_ids = get_cell_ids(lat, lng)
+                timestamps = [0,] * len(cell_ids)
+                api.set_position(lat, lng, 0)  # provide player position on the earth
+                api.get_map_objects(latitude = util.f2i(lat), longitude = util.f2i(lng), since_timestamp_ms = timestamps, cell_id = cell_ids)
+                time.sleep(1)
+                response_dict = api.call()
+
+                if 'status' in response_dict['responses']['GET_MAP_OBJECTS']:
+                    if response_dict['responses']['GET_MAP_OBJECTS']['status'] == 1:
+                        for map_cell in response_dict['responses']['GET_MAP_OBJECTS']['map_cells']:
+                            if 'wild_pokemons' in map_cell:
+                                for pokemon in map_cell['wild_pokemons']:
+                                    if str(pokemon['encounter_id']) not in pokemons:
+                                        pokemon['hides_at'] = time.time() + pokemon['time_till_hidden_ms'] / 1000
+                                        pokemon['name'] = pokemon_mapping[str(pokemon['pokemon_data']['pokemon_id'])]
+
+                                        pokemons[str(pokemon['encounter_id'])] = pokemon
+                                        json.dump(pokemons, open("known_pokemons.json", 'w'))
+
+                                        alert_slack(pokemon)
+                                        save_pokemon(pokemon)
 
 
 def alert_slack(pokemon):
@@ -138,6 +157,10 @@ def bounds(cell_id):
 
 
 def create_hexagon(lat, lng):
+    """
+    Provides new locations in a hexagon around the provided latitude and longitude
+
+    """
     bearings = [0, 60, 120, 180, 240, 300]
 
     coords = [(lat, lng)]
